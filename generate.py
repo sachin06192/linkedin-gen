@@ -14,6 +14,7 @@ import anthropic
 import feedparser
 import requests
 import yaml
+from PIL import Image, ImageDraw, ImageFont
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -76,11 +77,11 @@ def fetch_reddit(subreddits, limit=15):
     """Fetch hot posts from Reddit subreddits via public JSON API."""
     print(f"  [Reddit] Fetching from r/{', r/'.join(subreddits)}...")
     posts = []
-    headers = {"User-Agent": "linkedin-gen/1.0"}
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; linkedin-gen/1.0)"}
     for sub in subreddits:
         try:
             resp = requests.get(
-                f"https://www.reddit.com/r/{sub}/hot.json?limit={limit}",
+                f"https://old.reddit.com/r/{sub}/hot.json?limit={limit}",
                 headers=headers,
                 timeout=10,
             )
@@ -383,6 +384,149 @@ def save_output(content, config):
     return out_path
 
 
+# ─── Image Generation ─────────────────────────────────────────────────────────
+
+GRADIENTS = [
+    [(15, 23, 42), (88, 28, 135)],       # dark blue → purple
+    [(17, 24, 39), (5, 150, 105)],        # dark navy → teal
+    [(30, 27, 75), (219, 39, 119)],       # indigo → pink
+    [(20, 20, 20), (234, 88, 12)],        # charcoal → orange
+    [(15, 23, 42), (37, 99, 235)],        # dark → bright blue
+    [(39, 21, 52), (220, 38, 38)],        # dark purple → red
+    [(10, 30, 30), (6, 182, 212)],        # dark teal → cyan
+]
+
+FONT_PATH = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+IMG_W, IMG_H = 1200, 628
+
+
+def _lerp_color(c1, c2, t):
+    """Linear interpolate between two RGB colors."""
+    return tuple(int(a + (b - a) * t) for a, b in zip(c1, c2))
+
+
+def _draw_gradient(draw, w, h, c1, c2):
+    """Draw a vertical gradient from c1 to c2."""
+    for y in range(h):
+        color = _lerp_color(c1, c2, y / h)
+        draw.line([(0, y), (w, y)], fill=color)
+
+
+def _wrap_text(text, font, max_width, draw):
+    """Word-wrap text to fit within max_width pixels."""
+    words = text.split()
+    lines = []
+    current = ""
+    for word in words:
+        test = f"{current} {word}".strip()
+        bbox = draw.textbbox((0, 0), test, font=font)
+        if bbox[2] - bbox[0] > max_width and current:
+            lines.append(current)
+            current = word
+        else:
+            current = test
+    if current:
+        lines.append(current)
+    return lines
+
+
+def generate_post_image(hook_text, post_num, out_dir):
+    """Generate a quote-card image for a LinkedIn post."""
+    img = Image.new("RGB", (IMG_W, IMG_H))
+    draw = ImageDraw.Draw(img)
+
+    # Pick gradient
+    c1, c2 = GRADIENTS[post_num % len(GRADIENTS)]
+    _draw_gradient(draw, IMG_W, IMG_H, c1, c2)
+
+    # Add subtle decorative element — a faint circle
+    circle_x = IMG_W * 0.75
+    circle_y = IMG_H * 0.3
+    circle_r = 180
+    for r in range(int(circle_r), 0, -1):
+        alpha = int(25 * (r / circle_r))
+        shade = _lerp_color(c2, (255, 255, 255), 0.3)
+        color = (*shade, alpha)
+        # Approximate with filled ellipses at decreasing opacity
+        draw.ellipse(
+            [circle_x - r, circle_y - r, circle_x + r, circle_y + r],
+            outline=(*shade,),
+        )
+
+    # Load font — try large first, shrink if text doesn't fit
+    padding = 80
+    max_text_w = IMG_W - padding * 2
+    font_size = 52
+    while font_size > 28:
+        font = ImageFont.truetype(FONT_PATH, font_size)
+        lines = _wrap_text(hook_text, font, max_text_w, draw)
+        line_h = font_size * 1.4
+        total_h = len(lines) * line_h
+        if total_h < IMG_H - padding * 2 and len(lines) <= 6:
+            break
+        font_size -= 2
+
+    # Center text vertically
+    y_start = (IMG_H - total_h) / 2
+    for i, line in enumerate(lines):
+        bbox = draw.textbbox((0, 0), line, font=font)
+        text_w = bbox[2] - bbox[0]
+        x = (IMG_W - text_w) / 2
+        y = y_start + i * line_h
+        # Subtle shadow
+        draw.text((x + 2, y + 2), line, fill=(0, 0, 0, 128), font=font)
+        draw.text((x, y), line, fill=(255, 255, 255), font=font)
+
+    # Small accent line at bottom
+    line_y = IMG_H - 40
+    line_w = 60
+    draw.line(
+        [(IMG_W / 2 - line_w, line_y), (IMG_W / 2 + line_w, line_y)],
+        fill=(255, 255, 255, 180),
+        width=3,
+    )
+
+    filename = f"post_{post_num + 1}.png"
+    path = out_dir / filename
+    img.save(path, "PNG")
+    return path
+
+
+def extract_hooks(content):
+    """Extract the hook (first non-empty line) from each post in the generated output."""
+    hooks = []
+    # Split by post headers
+    posts = re.split(r"###\s*Post\s*\d+\s*:", content)
+    for block in posts[1:]:  # skip preamble before first post
+        # Find first non-empty line after the framework name line
+        lines = block.strip().split("\n")
+        for line in lines[1:]:  # skip framework name line
+            cleaned = line.strip().strip("*").strip("#").strip("-").strip()
+            if cleaned and len(cleaned) > 10 and not cleaned.startswith("---"):
+                hooks.append(cleaned)
+                break
+    return hooks
+
+
+def generate_images(content, config):
+    """Generate quote-card images for each post."""
+    out_dir = ROOT / config["output"]["dir"]
+    out_dir.mkdir(exist_ok=True)
+
+    hooks = extract_hooks(content)
+    if not hooks:
+        print("Warning: Could not extract hooks from posts, skipping images")
+        return []
+
+    paths = []
+    for i, hook in enumerate(hooks):
+        path = generate_post_image(hook, i, out_dir)
+        paths.append(path)
+        print(f"  Image {i + 1}: {path.name}")
+
+    return paths
+
+
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -405,6 +549,11 @@ def main():
         type=str,
         default=None,
         help="Experiment idea for the 'How I Built X' post",
+    )
+    parser.add_argument(
+        "--no-images",
+        action="store_true",
+        help="Skip quote-card image generation",
     )
     parser.add_argument(
         "--config",
@@ -455,6 +604,15 @@ def main():
     # Save
     out_path = save_output(content, config)
     print(f"\nSaved to: {out_path}")
+
+    # Step 3: Generate images
+    if not args.no_images:
+        print("\nGenerating post images...")
+        img_paths = generate_images(content, config)
+        if img_paths:
+            print(f"Generated {len(img_paths)} images in {ROOT / config['output']['dir']}/")
+    else:
+        print("\nSkipping image generation (--no-images)")
 
     # Also print to terminal
     print("\n" + "=" * 60)
