@@ -1,0 +1,26 @@
+author:
+  name: "Sachin"
+  role: "Tech Founder"
+  domain: "AI & Technology"
+  interests: ["AI agents", "LLMs", "Python", "automation", "algo trading", "startups"]
+  tone_mix: ["casual storyteller", "sharp & insightful", "builder in public"]
+
+trends:
+  sources:
+    hackernews: true
+    reddit: true
+    google_news: true
+    techcrunch: true
+    producthunt: true
+  reddit_subs: ["artificial", "MachineLearning", "LocalLLaMA"]
+  news_queries: ["artificial intelligence", "LLM", "AI startups", "tech founders"]
+  max_trends: 15
+
+generation:
+  posts_per_batch: 7
+  model: "claude-sonnet-4-6"
+  max_tokens: 1000
+
+output:
+  dir: "output"
+  format: "markdown"
