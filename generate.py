@@ -20,11 +20,29 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).parent
 CONFIG_PATH = ROOT / "config.yaml"
+IDEAS_PATH = ROOT / "ideas.txt"
 
 
 def load_config():
     with open(CONFIG_PATH) as f:
         return yaml.safe_load(f)
+
+
+def load_ideas():
+    """Load user ideas from ideas.txt, skipping comments and blank lines."""
+    if not IDEAS_PATH.exists():
+        return []
+    ideas = []
+    with open(IDEAS_PATH) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            # Strip leading number + dot (e.g. "1. idea" -> "idea")
+            cleaned = re.sub(r"^\d+\.\s*", "", line)
+            if cleaned:
+                ideas.append(cleaned)
+    return ideas
 
 
 # ─── Trend Fetching ──────────────────────────────────────────────────────────
@@ -568,9 +586,15 @@ def main():
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
+    # Load ideas from ideas.txt
+    ideas = load_ideas()
+    all_themes = args.theme + ideas
+    if ideas:
+        print(f"Loaded {len(ideas)} idea(s) from ideas.txt")
+
     # Validate
-    if args.no_trends and not args.theme:
-        print("Error: --no-trends requires at least one --theme")
+    if args.no_trends and not all_themes:
+        print("Error: --no-trends requires at least one --theme or idea in ideas.txt")
         sys.exit(1)
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -581,10 +605,10 @@ def main():
     # Step 1: Fetch trends
     if args.no_trends:
         print("Skipping trend fetching (--no-trends)")
-        trends = [{"title": t, "source": "User", "url": ""} for t in args.theme]
+        trends = [{"title": t, "source": "User", "url": ""} for t in all_themes]
     else:
         print("Fetching real-time trends...\n")
-        trends = aggregate_trends(config, extra_themes=args.theme)
+        trends = aggregate_trends(config, extra_themes=all_themes)
 
     if not trends:
         print("Warning: No trends found. Using fallback themes.")

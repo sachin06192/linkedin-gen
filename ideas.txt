@@ -1,0 +1,10 @@
+# Post Ideas
+# Add your ideas below (one per line, numbered)
+# These get mixed in with fetched trends when generating posts
+# Lines starting with # are ignored
+#
+# Example:
+# 1. How I automated my algo trading strategy with Python
+# 2. The real cost of running AI in production
+
+1.
