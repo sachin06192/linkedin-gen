@@ -7,4 +7,4 @@
 # 1. How I automated my algo trading strategy with Python
 # 2. The real cost of running AI in production
 
-1.
+1. how i am using openspec for managing llm workflow. pros cons and learnings. 
