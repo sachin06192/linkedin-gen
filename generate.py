@@ -278,38 +278,141 @@ FRAMEWORKS = [
         "instruction": "Share a progress update on something you're building. Include specific numbers (users, revenue, lines of code, days). Be honest about failures and wins. End with what's next.",
         "example_hook": "Week 12 of building [product]. Revenue: $0. Learnings: priceless.",
     },
+    # ── EDUTAINMENT ───────────────────────────────────────────────────────────
+    {
+        "name": "Edutainment: 1000 Hours → 5 Minutes",
+        "instruction": (
+            "Take something you spent weeks/months learning and compress it into a "
+            "5-minute read. You are a top expert translating deep knowledge for a "
+            "beginner. Use concrete examples, a code snippet or diagram if it helps. "
+            "The reader should walk away feeling they just skipped a painful learning "
+            "curve. Write it like you're explaining to a smart friend over coffee — "
+            "NOT like a textbook or press release."
+        ),
+        "example_hook": "I spent 200 hours learning Kubernetes. Here's what actually matters in 5 minutes.",
+    },
+    {
+        "name": "Edutainment: Free Resources Goldmine",
+        "instruction": (
+            "Curate a list of genuinely free resources, tools, credits, or programs "
+            "that most people don't know about. Be specific — include exact names, "
+            "dollar amounts, limits. No vague 'check out X'. Each item should "
+            "make the reader think 'wait, this is free?' Ground it in a trending "
+            "topic or a problem people are actively trying to solve. Write it like "
+            "you're sharing a cheat sheet with a friend, not writing an ad."
+        ),
+        "example_hook": "You can build an AI startup for $0. Here are 8 free resources nobody talks about.",
+    },
+    {
+        "name": "Edutainment: Myth Buster",
+        "instruction": (
+            "Take a widely believed 'truth' in tech/AI and show why it's wrong or "
+            "misleading. Use real data, your own experience, or a concrete example "
+            "to debunk it. Don't be preachy — be the friend who says 'actually, "
+            "let me show you something.' The goal is to educate through surprise. "
+            "Ground it in something trending right now."
+        ),
+        "example_hook": "\"You need a GPU to run LLMs locally.\" I ran one on a $300 laptop. Here's what happened.",
+    },
+    {
+        "name": "Edutainment: How It Actually Works",
+        "instruction": (
+            "Pick a technology, tool, or concept that people use every day but don't "
+            "truly understand. Explain the internals in simple language with a "
+            "concrete walkthrough. Include a code snippet, diagram description, or "
+            "step-by-step breakdown. Make the reader feel smarter, not dumber. "
+            "Write like a diary entry about something you just figured out."
+        ),
+        "example_hook": "Everyone uses Docker. Almost nobody understands what happens when you type 'docker run'.",
+    },
+    # ── STORYTELLING ──────────────────────────────────────────────────────────
+    {
+        "name": "Story: Build in Public (Episode)",
+        "instruction": (
+            "Write an episode-style update — like a TV show people follow daily. "
+            "Structure: where you left off → what happened today → cliffhanger or "
+            "teaser for next episode. Include specific numbers (lines of code, "
+            "users, revenue, bugs). Be brutally honest about failures. The reader "
+            "should feel invested and want to see the next episode. Think 'diary "
+            "entry' not 'press release'."
+        ),
+        "example_hook": "Day 14 of building my AI trading bot. Yesterday it made $12. Today it lost $47. Here's why.",
+    },
+    {
+        "name": "Story: The Failure That Taught Me",
+        "instruction": (
+            "Tell a real (or realistic) story about something that went wrong — a "
+            "bug, a bad decision, a project that failed. Start in the middle of the "
+            "action (the 2 AM alert, the angry customer, the demo that crashed). "
+            "Build tension. Land on a specific, non-obvious lesson. Write it like "
+            "you're telling a friend at a bar. NO generic morals like 'failure is "
+            "the best teacher'. The lesson should be tactical and useful."
+        ),
+        "example_hook": "I shipped a feature on Friday. By Monday, 2,000 users had bad data. Here's the one line I missed.",
+    },
+    {
+        "name": "Story: Behind the Scenes",
+        "instruction": (
+            "Pull back the curtain on something people normally don't see — how a "
+            "system really works, what a day actually looks like, how a decision "
+            "was really made. Use specific details: timestamps, tool names, exact "
+            "numbers. The reader should feel like they're getting insider access. "
+            "Write it as a narrative with a beginning, middle, and end — not a "
+            "listicle wearing a story's clothes."
+        ),
+        "example_hook": "Here's what actually happens when your algo trading bot places an order at 9:15 AM.",
+    },
 ]
 
 SYSTEM_PROMPT = """\
 You are a LinkedIn ghostwriter for {name}, a {role} in the {domain} space.
 
+CONTENT PHILOSOPHY:
+The best-performing content falls into two categories — Edutainment and Storytelling. \
+Lean heavily into these. Avoid controversy/hate-bait, vague wisdom one-liners, and \
+generic "spark a conversation" posts.
+
+EDUTAINMENT = You are a top expert who spent 1000 hours learning something. \
+Turn that into a 5-minute read so the reader skips the painful part. \
+Think: free resource lists, myth-busting, "how it actually works" deep dives.
+
+STORYTELLING = You are a TV show. Every post is an episode people want to follow. \
+Think: build-in-public updates, failure stories, behind-the-scenes narratives. \
+Make people anticipate the next post.
+
 VOICE & TONE:
+- Write like a diary entry or like you're telling a story to a friend
+- NEVER write like a press release, ad campaign, or corporate announcement
 - First-person, conversational, confident but not arrogant
 - Mix of: {tone_mix}
 - No corporate jargon, no cringe motivational quotes, no "I'm humbled"
-- Write like a smart friend explaining something interesting over coffee
 
 STRUCTURE (every post):
 1. Hook line — the first 1-2 lines must stop the scroll. Be specific, surprising, or provocative.
 2. Body — deliver real value: a story, insight, data, or walkthrough. Use short paragraphs (1-2 lines each). Blank lines between paragraphs.
-3. CTA / Takeaway — end with a clear takeaway or a genuine question. Never "Agree?" or "Thoughts?"
+3. CTA / Takeaway — end with a concrete lesson or a teaser for the next episode. Never "Agree?" or "Thoughts?"
 4. Hashtags — exactly 3-5 relevant hashtags at the very end.
 
 FORMATTING RULES:
 - Short paragraphs (1-2 lines max), separated by blank lines
 - Occasional **bold** for emphasis (sparingly)
 - No emoji spam — at most 1-2 per post, only if they add meaning
-- Posts should be 150-250 words (LinkedIn sweet spot)
+- Posts should be 150-300 words
 
 ANTI-PATTERNS (never do these):
 - "I'm humbled/excited to announce..."
 - Emoji walls or bullet-point-with-emoji lists
 - Generic platitudes ("hard work pays off", "the future is now")
+- Vague wisdom one-liners with no substance behind them
+- Controversy or hate-bait just to get engagement
 - Ending with "Agree?" or "What do you think?" with no context
 - Fake humility or humble-bragging
 - Mentioning "LinkedIn" or "this platform"
+- Low-effort generic takes — every post should feel like it took 2+ hours of thought
 
-AUTHENTICITY:
+QUALITY BAR:
+- Every post must teach something specific OR advance a narrative people follow
+- If you can swap out {name}'s name and the post still works for anyone, it's too generic
 - Include specific details, numbers, tool names, code references when relevant
 - Admit failures and uncertainties — it builds trust
 - Reference actual trends and news happening right now
@@ -330,7 +433,7 @@ def build_user_prompt(trends, frameworks, experiment=None):
             line += f"\n   Summary: {t['summary']}"
         trend_text += line + "\n"
 
-    framework_text = "\n## Post Frameworks\n\nGenerate exactly 7 LinkedIn posts, one for each framework below. Ground each post in one or more of the trending topics above.\n\n"
+    framework_text = f"\n## Post Frameworks\n\nGenerate exactly {len(frameworks)} LinkedIn posts, one for each framework below. Ground each post in one or more of the trending topics above.\n\n"
     for i, fw in enumerate(frameworks, 1):
         framework_text += f"### Post {i}: {fw['name']}\n"
         framework_text += f"Instruction: {fw['instruction']}\n"
@@ -340,19 +443,23 @@ def build_user_prompt(trends, frameworks, experiment=None):
     if experiment:
         experiment_text = f"\n## Experiment Idea\nFor the 'How I Built X' post (Post 3), base it around this experiment concept: \"{experiment}\"\nInclude a suggested code snippet or tool stack.\n\n"
 
-    output_format = """
+    output_format = f"""
 ## Output Format
 
 For each post, output:
 
 ---
 ### Post N: [Framework Name]
+IMAGE_QUERY: [A specific search query to find a relevant image for this post. \
+Think: tweet screenshots, product screenshots, charts, news headlines, memes. \
+Be specific — e.g. "elon musk naval tweet coding" not "AI technology". \
+Prefer queries that would find real screenshots, tweets, or visuals over stock photos.]
 
 [The full LinkedIn post text, ready to copy-paste]
 
 ---
 
-Do NOT include any commentary, just the 7 posts.
+Do NOT include any commentary, just the {len(frameworks)} posts.
 """
 
     return trend_text + framework_text + experiment_text + output_format
@@ -513,34 +620,117 @@ def generate_post_image(hook_text, post_num, out_dir):
 def extract_hooks(content):
     """Extract the hook (first non-empty line) from each post in the generated output."""
     hooks = []
-    # Split by post headers
     posts = re.split(r"###\s*Post\s*\d+\s*:", content)
-    for block in posts[1:]:  # skip preamble before first post
-        # Find first non-empty line after the framework name line
+    for block in posts[1:]:
         lines = block.strip().split("\n")
-        for line in lines[1:]:  # skip framework name line
+        for line in lines[1:]:
             cleaned = line.strip().strip("*").strip("#").strip("-").strip()
-            if cleaned and len(cleaned) > 10 and not cleaned.startswith("---"):
+            if (
+                cleaned
+                and len(cleaned) > 10
+                and not cleaned.startswith("---")
+                and not cleaned.startswith("IMAGE_QUERY:")
+            ):
                 hooks.append(cleaned)
                 break
     return hooks
 
 
+def extract_image_queries(content):
+    """Extract IMAGE_QUERY lines from each post."""
+    queries = []
+    posts = re.split(r"###\s*Post\s*\d+\s*:", content)
+    for block in posts[1:]:
+        query = None
+        for line in block.strip().split("\n"):
+            if line.strip().startswith("IMAGE_QUERY:"):
+                query = line.strip().replace("IMAGE_QUERY:", "").strip()
+                break
+        queries.append(query)
+    return queries
+
+
+def search_and_download_image(query, post_num, out_dir, timeout=10):
+    """Search DuckDuckGo for a relevant image and download it.
+    Returns the saved path on success, None on failure."""
+    try:
+        from duckduckgo_search import DDGS
+
+        with DDGS() as ddgs:
+            results = list(ddgs.images(query, max_results=5))
+
+        if not results:
+            return None
+
+        # Try downloading the first few results until one works
+        for result in results[:3]:
+            img_url = result.get("image")
+            if not img_url:
+                continue
+            try:
+                resp = requests.get(img_url, timeout=timeout, stream=True,
+                                    headers={"User-Agent": "Mozilla/5.0"})
+                resp.raise_for_status()
+                content_type = resp.headers.get("Content-Type", "")
+                if "image" not in content_type:
+                    continue
+
+                ext = "jpg"
+                if "png" in content_type:
+                    ext = "png"
+                elif "webp" in content_type:
+                    ext = "webp"
+
+                filename = f"post_{post_num + 1}_img.{ext}"
+                path = out_dir / filename
+                with open(path, "wb") as f:
+                    for chunk in resp.iter_content(8192):
+                        f.write(chunk)
+
+                # Verify it's a valid image
+                img = Image.open(path)
+                img.verify()
+                return path
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"  Image search failed for post {post_num + 1}: {e}")
+
+    return None
+
+
 def generate_images(content, config):
-    """Generate quote-card images for each post."""
+    """Find relevant images for each post, falling back to gradient quote cards."""
     out_dir = ROOT / config["output"]["dir"]
     out_dir.mkdir(exist_ok=True)
 
     hooks = extract_hooks(content)
+    image_queries = extract_image_queries(content)
+
     if not hooks:
         print("Warning: Could not extract hooks from posts, skipping images")
         return []
 
     paths = []
     for i, hook in enumerate(hooks):
-        path = generate_post_image(hook, i, out_dir)
+        query = image_queries[i] if i < len(image_queries) else None
+        path = None
+
+        # Try searching for a relevant image first
+        if query:
+            print(f"  Post {i + 1}: Searching \"{query}\"...")
+            path = search_and_download_image(query, i, out_dir)
+            if path:
+                print(f"  Post {i + 1}: Found image -> {path.name}")
+
+        # Fall back to gradient quote card
+        if path is None:
+            path = generate_post_image(hook, i, out_dir)
+            print(f"  Post {i + 1}: Generated quote card -> {path.name}")
+
         paths.append(path)
-        print(f"  Image {i + 1}: {path.name}")
 
     return paths
 
