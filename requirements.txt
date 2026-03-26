@@ -4,3 +4,6 @@ requests
 feedparser
 Pillow
 duckduckgo-search
+trafilatura
+beautifulsoup4
+lxml

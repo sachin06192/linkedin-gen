@@ -1,19 +1,30 @@
 #!/usr/bin/env python3
-"""LinkedIn Post Generator — fetch real-time trends, generate 7 posts via Claude."""
+"""
+LinkedIn Post Generator — Two-Phase Pipeline
+=============================================
+Phase 1: python generate.py --research-only
+  → Fetches trends, enriches with article content + HN comments, saves research JSON
+
+Phase 2: Claude Code session reads research JSON and generates posts with deep research
+
+Phase 3: python generate.py --images-only --input output/batch_YYYY-MM-DD.md
+  → Searches/generates images for finalized posts
+"""
 
 import argparse
 import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, date
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import anthropic
 import feedparser
 import requests
 import yaml
+from bs4 import BeautifulSoup
 from PIL import Image, ImageDraw, ImageFont
 
 # ─── Config ───────────────────────────────────────────────────────────────────
@@ -38,7 +49,6 @@ def load_ideas():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            # Strip leading number + dot (e.g. "1. idea" -> "idea")
             cleaned = re.sub(r"^\d+\.\s*", "", line)
             if cleaned:
                 ideas.append(cleaned)
@@ -47,9 +57,9 @@ def load_ideas():
 
 # ─── Trend Fetching ──────────────────────────────────────────────────────────
 
-def fetch_hackernews(limit=30):
-    """Fetch top stories from Hacker News public API."""
-    print("  [HN] Fetching top stories...")
+def fetch_hackernews(limit=30, comments_per_story=5):
+    """Fetch top stories from Hacker News with top comments."""
+    print("  [HN] Fetching top stories + comments...")
     try:
         resp = requests.get(
             "https://hacker-news.firebaseio.com/v0/topstories.json", timeout=10
@@ -58,7 +68,7 @@ def fetch_hackernews(limit=30):
         story_ids = resp.json()[:limit]
 
         stories = []
-        # Fetch stories in parallel for speed
+
         def _get(sid):
             r = requests.get(
                 f"https://hacker-news.firebaseio.com/v0/item/{sid}.json", timeout=10
@@ -66,25 +76,67 @@ def fetch_hackernews(limit=30):
             r.raise_for_status()
             return r.json()
 
+        def _get_comment(cid):
+            """Fetch a single HN comment."""
+            try:
+                r = requests.get(
+                    f"https://hacker-news.firebaseio.com/v0/item/{cid}.json", timeout=5
+                )
+                r.raise_for_status()
+                item = r.json()
+                if item and item.get("text") and not item.get("deleted"):
+                    # Clean HTML from comment text
+                    text = BeautifulSoup(item["text"], "lxml").get_text(separator=" ")
+                    return text[:1000]
+            except Exception:
+                pass
+            return None
+
         with ThreadPoolExecutor(max_workers=10) as pool:
             futures = {pool.submit(_get, sid): sid for sid in story_ids}
             for fut in as_completed(futures):
                 try:
                     item = fut.result()
                     if item and item.get("title"):
-                        stories.append(
-                            {
-                                "title": item["title"],
-                                "url": item.get("url", ""),
-                                "score": item.get("score", 0),
-                                "source": "Hacker News",
-                            }
-                        )
+                        story = {
+                            "title": item["title"],
+                            "url": item.get("url", ""),
+                            "score": item.get("score", 0),
+                            "source": "Hacker News",
+                            "hn_id": item.get("id"),
+                            "hn_comment_ids": item.get("kids", [])[:comments_per_story],
+                        }
+                        stories.append(story)
                 except Exception:
                     pass
 
+        # Fetch top comments for all stories in parallel
+        all_comment_ids = []
+        comment_map = {}  # cid -> story index
+        for i, s in enumerate(stories):
+            for cid in s.get("hn_comment_ids", []):
+                all_comment_ids.append(cid)
+                comment_map[cid] = i
+
+        if all_comment_ids:
+            comments_by_story = {i: [] for i in range(len(stories))}
+            with ThreadPoolExecutor(max_workers=15) as pool:
+                cfutures = {pool.submit(_get_comment, cid): cid for cid in all_comment_ids}
+                for fut in as_completed(cfutures):
+                    cid = cfutures[fut]
+                    text = fut.result()
+                    if text:
+                        idx = comment_map[cid]
+                        comments_by_story[idx].append(text)
+
+            for i, s in enumerate(stories):
+                s["hn_comments"] = comments_by_story.get(i, [])
+                # Clean up temp fields
+                s.pop("hn_comment_ids", None)
+
         stories.sort(key=lambda x: x["score"], reverse=True)
-        print(f"  [HN] Got {len(stories)} stories")
+        total_comments = sum(len(s.get("hn_comments", [])) for s in stories)
+        print(f"  [HN] Got {len(stories)} stories, {total_comments} comments")
         return stories
     except Exception as e:
         print(f"  [HN] Failed: {e}")
@@ -92,7 +144,7 @@ def fetch_hackernews(limit=30):
 
 
 def fetch_reddit(subreddits, limit=15):
-    """Fetch hot posts from Reddit subreddits via public JSON API."""
+    """Fetch hot posts from Reddit subreddits with self-text."""
     print(f"  [Reddit] Fetching from r/{', r/'.join(subreddits)}...")
     posts = []
     headers = {"User-Agent": "Mozilla/5.0 (compatible; linkedin-gen/1.0)"}
@@ -114,6 +166,7 @@ def fetch_reddit(subreddits, limit=15):
                             "url": f"https://reddit.com{p.get('permalink', '')}",
                             "score": p.get("score", 0),
                             "source": f"r/{sub}",
+                            "selftext": p.get("selftext", "")[:2000],
                         }
                     )
         except Exception as e:
@@ -146,17 +199,21 @@ def fetch_google_news(queries):
 
 
 def fetch_techcrunch():
-    """Fetch latest articles from TechCrunch RSS feed."""
+    """Fetch latest articles from TechCrunch RSS feed (full summary)."""
     print("  [TechCrunch] Fetching RSS feed...")
     try:
         feed = feedparser.parse("https://techcrunch.com/feed/")
         articles = []
         for entry in feed.entries[:20]:
+            summary = entry.get("summary", "")
+            # Clean HTML from RSS summary
+            if summary:
+                summary = BeautifulSoup(summary, "lxml").get_text(separator=" ")
             articles.append(
                 {
                     "title": entry.get("title", ""),
                     "url": entry.get("link", ""),
-                    "summary": entry.get("summary", "")[:200],
+                    "summary": summary,
                     "source": "TechCrunch",
                 }
             )
@@ -168,17 +225,20 @@ def fetch_techcrunch():
 
 
 def fetch_producthunt():
-    """Fetch trending products from Product Hunt RSS feed."""
+    """Fetch trending products from Product Hunt RSS feed (full summary)."""
     print("  [Product Hunt] Fetching RSS feed...")
     try:
         feed = feedparser.parse("https://www.producthunt.com/feed")
         products = []
         for entry in feed.entries[:15]:
+            summary = entry.get("summary", "")
+            if summary:
+                summary = BeautifulSoup(summary, "lxml").get_text(separator=" ")
             products.append(
                 {
                     "title": entry.get("title", ""),
                     "url": entry.get("link", ""),
-                    "summary": entry.get("summary", "")[:200],
+                    "summary": summary,
                     "source": "Product Hunt",
                 }
             )
@@ -189,17 +249,75 @@ def fetch_producthunt():
         return []
 
 
+# ─── Article Extraction ──────────────────────────────────────────────────────
+
+def extract_article(url, max_chars=3000):
+    """Extract article text from a URL using trafilatura."""
+    if not url:
+        return None
+    try:
+        import trafilatura
+        downloaded = trafilatura.fetch_url(url)
+        if downloaded:
+            text = trafilatura.extract(
+                downloaded,
+                include_comments=False,
+                include_tables=False,
+                favor_recall=True,
+            )
+            if text:
+                return text[:max_chars]
+    except Exception as e:
+        print(f"    Article extraction failed for {url[:60]}: {e}")
+    return None
+
+
+def enrich_trends(trends, max_article_chars=3000):
+    """Enrich trends with article content extracted from their URLs."""
+    urls_to_fetch = []
+    for i, t in enumerate(trends):
+        if t.get("url") and t["source"] != "User":
+            urls_to_fetch.append((i, t["url"]))
+
+    if not urls_to_fetch:
+        return trends
+
+    print(f"\n  Extracting article content for {len(urls_to_fetch)} URLs...")
+
+    def _extract(idx_url):
+        idx, url = idx_url
+        text = extract_article(url, max_chars=max_article_chars)
+        return idx, text
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = {pool.submit(_extract, iu): iu for iu in urls_to_fetch}
+        success = 0
+        for fut in as_completed(futures):
+            try:
+                idx, text = fut.result()
+                if text:
+                    trends[idx]["article_text"] = text
+                    success += 1
+            except Exception:
+                pass
+
+    print(f"  Extracted {success}/{len(urls_to_fetch)} articles successfully")
+    return trends
+
+
+# ─── Trend Aggregation ───────────────────────────────────────────────────────
+
 def aggregate_trends(config, extra_themes=None):
     """Fetch from all enabled sources, deduplicate, return top trends."""
     sources = config["trends"]["sources"]
     max_trends = config["trends"]["max_trends"]
     all_items = []
 
-    # Fetch in parallel
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures = []
         if sources.get("hackernews"):
-            futures.append(pool.submit(fetch_hackernews))
+            hn_comments = config.get("research", {}).get("hn_comments_per_story", 5)
+            futures.append(pool.submit(fetch_hackernews, comments_per_story=hn_comments))
         if sources.get("reddit"):
             futures.append(
                 pool.submit(fetch_reddit, config["trends"]["reddit_subs"])
@@ -228,7 +346,6 @@ def aggregate_trends(config, extra_themes=None):
             seen.add(key)
             unique.append(item)
 
-    # Sort by score (if available), take top N
     unique.sort(key=lambda x: x.get("score", 0), reverse=True)
     trends = unique[:max_trends]
 
@@ -240,7 +357,64 @@ def aggregate_trends(config, extra_themes=None):
     return trends
 
 
-# ─── Post Generation ─────────────────────────────────────────────────────────
+# ─── Research Phase ──────────────────────────────────────────────────────────
+
+def save_research(trends, ideas, config):
+    """Save enriched trends + ideas + config to research JSON."""
+    out_dir = ROOT / config["output"]["dir"]
+    out_dir.mkdir(exist_ok=True)
+
+    research = {
+        "generated_at": datetime.now().isoformat(),
+        "author": config["author"],
+        "frameworks": [
+            {"name": fw["name"], "instruction": fw["instruction"], "example_hook": fw["example_hook"]}
+            for fw in FRAMEWORKS
+        ],
+        "user_ideas": ideas,
+        "trends": [],
+    }
+
+    for i, t in enumerate(trends):
+        entry = {
+            "id": i + 1,
+            "title": t.get("title", ""),
+            "url": t.get("url", ""),
+            "source": t.get("source", ""),
+            "score": t.get("score", 0),
+        }
+        if t.get("summary"):
+            entry["summary"] = t["summary"]
+        if t.get("article_text"):
+            entry["article_text"] = t["article_text"]
+        if t.get("hn_comments"):
+            entry["hn_comments"] = t["hn_comments"]
+        if t.get("hn_id"):
+            entry["hn_id"] = t["hn_id"]
+        if t.get("selftext"):
+            entry["selftext"] = t["selftext"]
+        research["trends"].append(entry)
+
+    filename = f"research_{date.today().isoformat()}.json"
+    out_path = out_dir / filename
+    with open(out_path, "w") as f:
+        json.dump(research, f, indent=2, ensure_ascii=False)
+
+    # Print summary
+    with_articles = sum(1 for t in research["trends"] if t.get("article_text"))
+    with_comments = sum(1 for t in research["trends"] if t.get("hn_comments"))
+    total_comments = sum(len(t.get("hn_comments", [])) for t in research["trends"])
+
+    print(f"\nResearch saved to: {out_path}")
+    print(f"  Trends: {len(research['trends'])}")
+    print(f"  With article text: {with_articles}")
+    print(f"  With HN comments: {with_comments} ({total_comments} total comments)")
+    print(f"  User ideas: {len(ideas)}")
+
+    return out_path
+
+
+# ─── Post Generation (API-based, optional) ───────────────────────────────────
 
 FRAMEWORKS = [
     {
@@ -280,7 +454,7 @@ FRAMEWORKS = [
     },
     # ── EDUTAINMENT ───────────────────────────────────────────────────────────
     {
-        "name": "Edutainment: 1000 Hours → 5 Minutes",
+        "name": "Edutainment: 1000 Hours -> 5 Minutes",
         "instruction": (
             "Take something you spent weeks/months learning and compress it into a "
             "5-minute read. You are a top expert translating deep knowledge for a "
@@ -469,6 +643,8 @@ Do NOT include any commentary, just the {num_posts} posts.
 
 def generate_posts(config, trends, experiment=None):
     """Call Claude API to generate posts."""
+    import anthropic
+
     author = config["author"]
     gen = config["generation"]
     total = gen["posts_per_batch"]
@@ -503,7 +679,7 @@ def save_output(content, config):
     filename = f"batch_{date.today().isoformat()}.md"
     out_path = out_dir / filename
 
-    header = f"# LinkedIn Posts — Week of {date.today().isoformat()}\n"
+    header = f"# LinkedIn Posts — Batch of {date.today().isoformat()}\n"
     header += f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
 
     with open(out_path, "w") as f:
@@ -515,13 +691,13 @@ def save_output(content, config):
 # ─── Image Generation ─────────────────────────────────────────────────────────
 
 GRADIENTS = [
-    [(15, 23, 42), (88, 28, 135)],       # dark blue → purple
-    [(17, 24, 39), (5, 150, 105)],        # dark navy → teal
-    [(30, 27, 75), (219, 39, 119)],       # indigo → pink
-    [(20, 20, 20), (234, 88, 12)],        # charcoal → orange
-    [(15, 23, 42), (37, 99, 235)],        # dark → bright blue
-    [(39, 21, 52), (220, 38, 38)],        # dark purple → red
-    [(10, 30, 30), (6, 182, 212)],        # dark teal → cyan
+    [(15, 23, 42), (88, 28, 135)],       # dark blue -> purple
+    [(17, 24, 39), (5, 150, 105)],        # dark navy -> teal
+    [(30, 27, 75), (219, 39, 119)],       # indigo -> pink
+    [(20, 20, 20), (234, 88, 12)],        # charcoal -> orange
+    [(15, 23, 42), (37, 99, 235)],        # dark -> bright blue
+    [(39, 21, 52), (220, 38, 38)],        # dark purple -> red
+    [(10, 30, 30), (6, 182, 212)],        # dark teal -> cyan
 ]
 
 FONT_PATH = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
@@ -529,19 +705,16 @@ IMG_W, IMG_H = 1200, 628
 
 
 def _lerp_color(c1, c2, t):
-    """Linear interpolate between two RGB colors."""
     return tuple(int(a + (b - a) * t) for a, b in zip(c1, c2))
 
 
 def _draw_gradient(draw, w, h, c1, c2):
-    """Draw a vertical gradient from c1 to c2."""
     for y in range(h):
         color = _lerp_color(c1, c2, y / h)
         draw.line([(0, y), (w, y)], fill=color)
 
 
 def _wrap_text(text, font, max_width, draw):
-    """Word-wrap text to fit within max_width pixels."""
     words = text.split()
     lines = []
     current = ""
@@ -559,29 +732,22 @@ def _wrap_text(text, font, max_width, draw):
 
 
 def generate_post_image(hook_text, post_num, out_dir):
-    """Generate a quote-card image for a LinkedIn post."""
     img = Image.new("RGB", (IMG_W, IMG_H))
     draw = ImageDraw.Draw(img)
 
-    # Pick gradient
     c1, c2 = GRADIENTS[post_num % len(GRADIENTS)]
     _draw_gradient(draw, IMG_W, IMG_H, c1, c2)
 
-    # Add subtle decorative element — a faint circle
     circle_x = IMG_W * 0.75
     circle_y = IMG_H * 0.3
     circle_r = 180
     for r in range(int(circle_r), 0, -1):
-        alpha = int(25 * (r / circle_r))
         shade = _lerp_color(c2, (255, 255, 255), 0.3)
-        color = (*shade, alpha)
-        # Approximate with filled ellipses at decreasing opacity
         draw.ellipse(
             [circle_x - r, circle_y - r, circle_x + r, circle_y + r],
             outline=(*shade,),
         )
 
-    # Load font — try large first, shrink if text doesn't fit
     padding = 80
     max_text_w = IMG_W - padding * 2
     font_size = 52
@@ -594,18 +760,15 @@ def generate_post_image(hook_text, post_num, out_dir):
             break
         font_size -= 2
 
-    # Center text vertically
     y_start = (IMG_H - total_h) / 2
     for i, line in enumerate(lines):
         bbox = draw.textbbox((0, 0), line, font=font)
         text_w = bbox[2] - bbox[0]
         x = (IMG_W - text_w) / 2
         y = y_start + i * line_h
-        # Subtle shadow
         draw.text((x + 2, y + 2), line, fill=(0, 0, 0, 128), font=font)
         draw.text((x, y), line, fill=(255, 255, 255), font=font)
 
-    # Small accent line at bottom
     line_y = IMG_H - 40
     line_w = 60
     draw.line(
@@ -621,7 +784,6 @@ def generate_post_image(hook_text, post_num, out_dir):
 
 
 def extract_hooks(content):
-    """Extract the hook (first non-empty line) from each post in the generated output."""
     hooks = []
     posts = re.split(r"###\s*Post\s*\d+\s*:", content)
     for block in posts[1:]:
@@ -640,7 +802,6 @@ def extract_hooks(content):
 
 
 def extract_image_queries(content):
-    """Extract IMAGE_QUERY lines from each post."""
     queries = []
     posts = re.split(r"###\s*Post\s*\d+\s*:", content)
     for block in posts[1:]:
@@ -654,8 +815,6 @@ def extract_image_queries(content):
 
 
 def search_and_download_image(query, post_num, out_dir, timeout=10):
-    """Search DuckDuckGo for a relevant image and download it.
-    Returns the saved path on success, None on failure."""
     try:
         from duckduckgo_search import DDGS
 
@@ -665,7 +824,6 @@ def search_and_download_image(query, post_num, out_dir, timeout=10):
         if not results:
             return None
 
-        # Try downloading the first few results until one works
         for result in results[:3]:
             img_url = result.get("image")
             if not img_url:
@@ -690,7 +848,6 @@ def search_and_download_image(query, post_num, out_dir, timeout=10):
                     for chunk in resp.iter_content(8192):
                         f.write(chunk)
 
-                # Verify it's a valid image
                 img = Image.open(path)
                 img.verify()
                 return path
@@ -704,7 +861,7 @@ def search_and_download_image(query, post_num, out_dir, timeout=10):
     return None
 
 
-def generate_images(content, config):
+def generate_images_from_content(content, config):
     """Find relevant images for each post, falling back to gradient quote cards."""
     out_dir = ROOT / config["output"]["dir"]
     out_dir.mkdir(exist_ok=True)
@@ -721,14 +878,13 @@ def generate_images(content, config):
         query = image_queries[i] if i < len(image_queries) else None
         path = None
 
-        # Try searching for a relevant image first
         if query:
             print(f"  Post {i + 1}: Searching \"{query}\"...")
+            time.sleep(3)  # Rate limit for DuckDuckGo
             path = search_and_download_image(query, i, out_dir)
             if path:
                 print(f"  Post {i + 1}: Found image -> {path.name}")
 
-        # Fall back to gradient quote card
         if path is None:
             path = generate_post_image(hook, i, out_dir)
             print(f"  Post {i + 1}: Generated quote card -> {path.name}")
@@ -742,35 +898,40 @@ def generate_images(content, config):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate LinkedIn posts grounded in real-time trends"
+        description="LinkedIn Post Generator — Two-Phase Pipeline"
     )
     parser.add_argument(
-        "--theme",
-        action="append",
-        default=[],
+        "--theme", action="append", default=[],
         help="Additional theme(s) to include (can repeat)",
     )
     parser.add_argument(
-        "--no-trends",
-        action="store_true",
+        "--no-trends", action="store_true",
         help="Skip trend fetching, use only --theme args",
     )
     parser.add_argument(
-        "--experiment",
-        type=str,
-        default=None,
+        "--experiment", type=str, default=None,
         help="Experiment idea for the 'How I Built X' post",
     )
     parser.add_argument(
-        "--no-images",
-        action="store_true",
-        help="Skip quote-card image generation",
+        "--no-images", action="store_true",
+        help="Skip image generation",
     )
     parser.add_argument(
-        "--config",
-        type=str,
-        default=None,
+        "--config", type=str, default=None,
         help="Path to config file (default: config.yaml)",
+    )
+    # New flags for two-phase pipeline
+    parser.add_argument(
+        "--research-only", action="store_true",
+        help="Phase 1: Fetch trends, enrich with article content, save research JSON. No post generation.",
+    )
+    parser.add_argument(
+        "--images-only", action="store_true",
+        help="Phase 3: Generate images from an existing batch markdown file.",
+    )
+    parser.add_argument(
+        "--input", type=str, default=None,
+        help="Input file for --images-only (path to batch markdown)",
     )
     args = parser.parse_args()
 
@@ -779,23 +940,31 @@ def main():
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
-    # Load ideas from ideas.txt
+    # ── Phase 3: Images only ──────────────────────────────────────────────
+    if args.images_only:
+        if not args.input:
+            print("Error: --images-only requires --input <path_to_batch.md>")
+            sys.exit(1)
+        input_path = Path(args.input)
+        if not input_path.exists():
+            print(f"Error: File not found: {input_path}")
+            sys.exit(1)
+        print(f"Generating images from: {input_path}")
+        content = input_path.read_text()
+        generate_images_from_content(content, config)
+        return
+
+    # ── Load ideas ────────────────────────────────────────────────────────
     ideas = load_ideas()
     all_themes = args.theme + ideas
     if ideas:
         print(f"Loaded {len(ideas)} idea(s) from ideas.txt")
 
-    # Validate
     if args.no_trends and not all_themes:
         print("Error: --no-trends requires at least one --theme or idea in ideas.txt")
         sys.exit(1)
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("Error: ANTHROPIC_API_KEY environment variable not set")
-        sys.exit(1)
-
-    # Step 1: Fetch trends
+    # ── Fetch trends ──────────────────────────────────────────────────────
     if args.no_trends:
         print("Skipping trend fetching (--no-trends)")
         trends = [{"title": t, "source": "User", "url": ""} for t in all_themes]
@@ -815,23 +984,34 @@ def main():
     for i, t in enumerate(trends[:10], 1):
         print(f"  {i}. [{t['source']}] {t['title']}")
 
-    # Step 2: Generate posts
+    # ── Phase 1: Research only ────────────────────────────────────────────
+    if args.research_only:
+        # Enrich trends with article content
+        max_chars = config.get("research", {}).get("max_article_chars", 3000)
+        trends = enrich_trends(trends, max_article_chars=max_chars)
+        save_research(trends, ideas, config)
+        return
+
+    # ── Full pipeline (legacy: requires ANTHROPIC_API_KEY) ────────────────
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        print("\nNo ANTHROPIC_API_KEY set.")
+        print("Use --research-only to generate research JSON, then use Claude Code to write posts.")
+        sys.exit(1)
+
     content = generate_posts(config, trends, experiment=args.experiment)
 
-    # Save
     out_path = save_output(content, config)
     print(f"\nSaved to: {out_path}")
 
-    # Step 3: Generate images
     if not args.no_images:
         print("\nGenerating post images...")
-        img_paths = generate_images(content, config)
+        img_paths = generate_images_from_content(content, config)
         if img_paths:
             print(f"Generated {len(img_paths)} images in {ROOT / config['output']['dir']}/")
     else:
         print("\nSkipping image generation (--no-images)")
 
-    # Also print to terminal
     print("\n" + "=" * 60)
     print(content)
     print("=" * 60)

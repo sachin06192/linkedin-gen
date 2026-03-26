@@ -21,6 +21,10 @@ generation:
   model: "claude-sonnet-4-6"
   max_tokens: 1000
 
+research:
+  hn_comments_per_story: 5
+  max_article_chars: 3000
+
 output:
   dir: "output"
   format: "markdown"
