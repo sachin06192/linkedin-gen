@@ -17,7 +17,7 @@ trends:
   max_trends: 15
 
 generation:
-  posts_per_batch: 14
+  posts_per_batch: 20
   model: "claude-sonnet-4-6"
   max_tokens: 1000
 

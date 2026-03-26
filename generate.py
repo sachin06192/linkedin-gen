@@ -422,8 +422,10 @@ You will be given trending topics/news to ground each post in reality. Use them 
 """
 
 
-def build_user_prompt(trends, frameworks, experiment=None):
+def build_user_prompt(trends, frameworks, experiment=None, total_posts=None):
     """Build the user message with trends and framework instructions."""
+    num_posts = total_posts or len(frameworks)
+
     trend_text = "## Current Trending Topics & News\n\n"
     for i, t in enumerate(trends, 1):
         line = f"{i}. [{t['source']}] {t['title']}"
@@ -433,9 +435,9 @@ def build_user_prompt(trends, frameworks, experiment=None):
             line += f"\n   Summary: {t['summary']}"
         trend_text += line + "\n"
 
-    framework_text = f"\n## Post Frameworks\n\nGenerate exactly {len(frameworks)} LinkedIn posts, one for each framework below. Ground each post in one or more of the trending topics above.\n\n"
+    framework_text = f"\n## Post Frameworks\n\nGenerate exactly {num_posts} LinkedIn posts. Use the frameworks below — one post per framework first, then reuse the best-fitting frameworks (especially Edutainment and Storytelling ones) for additional posts on different trending topics.\n\n"
     for i, fw in enumerate(frameworks, 1):
-        framework_text += f"### Post {i}: {fw['name']}\n"
+        framework_text += f"### Framework {i}: {fw['name']}\n"
         framework_text += f"Instruction: {fw['instruction']}\n"
         framework_text += f"Example hook style: \"{fw['example_hook']}\"\n\n"
 
@@ -459,7 +461,7 @@ Prefer queries that would find real screenshots, tweets, or visuals over stock p
 
 ---
 
-Do NOT include any commentary, just the {len(frameworks)} posts.
+Do NOT include any commentary, just the {num_posts} posts.
 """
 
     return trend_text + framework_text + experiment_text + output_format
@@ -469,6 +471,7 @@ def generate_posts(config, trends, experiment=None):
     """Call Claude API to generate posts."""
     author = config["author"]
     gen = config["generation"]
+    total = gen["posts_per_batch"]
 
     system = SYSTEM_PROMPT.format(
         name=author["name"],
@@ -478,14 +481,14 @@ def generate_posts(config, trends, experiment=None):
         interests=", ".join(author["interests"]),
     )
 
-    user_msg = build_user_prompt(trends, FRAMEWORKS, experiment)
+    user_msg = build_user_prompt(trends, FRAMEWORKS, experiment, total_posts=total)
 
     client = anthropic.Anthropic()
-    print(f"\nGenerating {gen['posts_per_batch']} posts with {gen['model']}...")
+    print(f"\nGenerating {total} posts with {gen['model']}...")
 
     response = client.messages.create(
         model=gen["model"],
-        max_tokens=gen["max_tokens"] * gen["posts_per_batch"],
+        max_tokens=gen["max_tokens"] * total,
         system=system,
         messages=[{"role": "user", "content": user_msg}],
     )
@@ -497,7 +500,7 @@ def save_output(content, config):
     """Save generated posts to output directory."""
     out_dir = ROOT / config["output"]["dir"]
     out_dir.mkdir(exist_ok=True)
-    filename = f"week_{date.today().isoformat()}.md"
+    filename = f"batch_{date.today().isoformat()}.md"
     out_path = out_dir / filename
 
     header = f"# LinkedIn Posts — Week of {date.today().isoformat()}\n"
